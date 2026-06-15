@@ -1,0 +1,76 @@
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.impute import SimpleImputer
+import matplotlib.pyplot as plt
+import seaborn as sns
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from statsmodels.tools.tools import add_constant
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+
+df = pd.DataFrame()
+
+def read():
+    df1 = pd.read_csv('FinalData.csv')
+    df[['ID Number', 'Age', 'SBP']] = df1[['ID Number', 'Age', 'SBP Merged']]
+    df2 = pd.read_sas('DR1TOT_J.xpt')
+    df['Sodium 1'] = df2['DR1TSODI']
+    df3 = pd.read_sas('DR2TOT_J.xpt')
+    df['Sodium 2'] = df3['DR2TSODI']
+    df['Sodium'] = (df['Sodium 1'] + df['Sodium 2']) / 2
+    df4 = pd.read_sas('BMX_J.xpt')
+    df['BMI'] = df4['BMXBMI']
+    df5 = pd.read_sas('PAQ_J.xpt')
+    df[['Vigorous-Intensity', 'Moderate-Intensity', 'Vigorous-Recreational', 'Moderate-Recreational', 'Sedentary']] = df5[['PAD615', 'PAD630', 'PAD660', 'PAD675', 'PAD680']]
+    dfn = df.dropna(subset=['SBP'])
+    return dfn
+
+def regression(df):
+    df_clean = df[(df['Sedentary'] < 800) & (df['BMI'] < 48) & (df['Sodium'] < 4000)].copy()
+    df_clean = df_clean[['SBP', 'Age', 'Sodium', 'BMI', 'Sedentary']].dropna()
+    
+    columns = ['Age', 'Sodium', 'BMI', 'Sedentary']
+    X = df_clean[columns]
+    y = df_clean['SBP']
+    
+    imputer = SimpleImputer(strategy='mean')
+    X_imputed = imputer.fit_transform(X)
+    
+    model = LinearRegression()
+    model.fit(X_imputed, y)
+    
+    sta = pd.DataFrame()
+    sta['Variables'] = X.columns
+    sta['Betas'] = model.coef_
+    print(sta)
+    print(f"Intercept: {model.intercept_}\n")
+
+    res = pd.DataFrame()
+    res['SBP_S'] = y.values
+    res['SBP_P'] = model.predict(X_imputed) 
+    res['Dif'] = res['SBP_S'] - res['SBP_P']
+    
+    sns.scatterplot(data=res, x='SBP_P', y='Dif')
+    plt.title("Residuals vs Fitted")
+    plt.axhline(0, color='red', linestyle='--')
+    plt.show()
+
+    X_with_constant = sm.add_constant(X_imputed) 
+    model2 = sm.OLS(y, X_with_constant).fit()
+    print(model2.bse)
+    print("\n")
+
+    for col in ['Age', 'Sodium', 'BMI', 'Sedentary']:
+        df_clean[col + '_z'] = (df_clean[col] - df_clean[col].mean()) / df_clean[col].std()
+    model_std = smf.ols('SBP ~ Age_z + Sodium_z + BMI_z + Sedentary_z', data=df_clean).fit()
+    print(model_std.params.drop('Intercept').sort_values(key=abs, ascending=False))
+    
+    vif_data = pd.DataFrame({
+        'feature': columns,
+        'VIF': [variance_inflation_factor(X_with_constant, i+1) for i in range(len(columns))]
+    })
+    print(vif_data)
+
+dfn = read()
+regression(dfn)
