@@ -1,0 +1,105 @@
+import pandas as pd
+import numpy as np
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    roc_auc_score,
+    roc_curve,
+    average_precision_score
+)
+
+import statsmodels.formula.api as smf
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from statsmodels.tools.tools import add_constant
+
+FEATURES = ["Age", "BMI", "UricAcid", "CRP"]
+
+def create():
+    df = pd.read_sas('MCQ_J.xpt')
+    df = (
+        df.merge(pd.read_csv('FinalData.csv'), on='SEQN', how='inner')
+          .merge(pd.read_sas('BMX_J (1).xpt'), on='SEQN', how='inner')
+          .merge(pd.read_sas('BIOPRO_J.xpt'), on='SEQN', how='inner')
+          .merge(pd.read_sas('HSCRP_J.xpt'), on='SEQN', how='inner')
+          .merge(pd.read_sas('CBC_J.xpt'), on='SEQN', how='inner')
+          .merge(pd.read_sas('ALB_CR_J.xpt'), on='SEQN', how='inner')
+          .merge(pd.read_sas('GHB_J.xpt'), on='SEQN', how='inner')
+    )
+    dfmod = pd.DataFrame({
+        "Arthritis": df["MCQ160A"],
+        "Age": df["Age"],
+        "UricAcid": df["LBDSUASI"],
+        "BMI": df["BMXBMI"],
+        "HbA1c": df["LBXGH"],
+        "Cholesterol": df["Total Cholesterol (mg/dl)"],
+        "CRP": df["LBXHSCRP"],
+        "WBC": df["LBXWBCSI"],
+        "AlbuminCreatineRatio": df["URDACT"]
+    })
+    dfmod = dfmod[dfmod["Arthritis"].isin([1, 2])]
+    dfmod["Arthritis"] = dfmod["Arthritis"].replace({1: 1, 2: 0})
+    dfmod = dfmod.dropna()
+    return dfmod
+
+def regression(df):
+    X = df[FEATURES]
+    y = df["Arthritis"]
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.20,
+        stratify=y,
+        random_state=42
+    )
+    model = Pipeline([
+        ("scaler", StandardScaler()),
+        ("logit", LogisticRegression(max_iter=1000))
+    ])
+    model.fit(X_train, y_train)
+    
+    y_prob = model.predict_proba(X_test)[:, 1]
+    fpr, tpr, thresholds = roc_curve(y_test, y_prob)
+    youden = tpr - fpr
+    best_idx = np.argmax(youden)
+    best_threshold = thresholds[best_idx]
+    
+    y_pred = (y_prob >= best_threshold).astype(int)
+    acc = accuracy_score(y_test, y_pred)
+    tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+    sensitivity = tp / (tp + fn)
+    specificity = tn / (tn + fp)
+    ppv = tp / (tp + fp)
+    npv = tn / (tn + fn)
+    auc = roc_auc_score(y_test, y_prob)
+    pr_auc = average_precision_score(y_test, y_prob)
+
+    print(f"Optimal Threshold: {best_threshold:.3f}")
+    print(f"Accuracy: {acc:.3f}")
+    print(f"ROC-AUC: {auc:.3f}")
+    print(f"PR-AUC: {pr_auc:.3f}")
+    print(f"Sensitivity: {sensitivity:.3f}")
+    print(f"Specificity: {specificity:.3f}")
+    print(f"PPV: {ppv:.3f}")
+    print(f"NPV: {npv:.3f}")
+
+    print("\nOdds Ratios")
+    model_sm = smf.logit(
+        "Arthritis ~ Age + BMI + UricAcid + CRP",
+        data=df
+    ).fit()
+
+    odds_ratios = pd.DataFrame({
+        "OR": np.exp(model_sm.params),
+        "Lower95": np.exp(model_sm.conf_int()[0]),
+        "Upper95": np.exp(model_sm.conf_int()[1]),
+        "p": model_sm.pvalues
+    })
+    print(odds_ratios)
+
+df = create()
+regression(df)
